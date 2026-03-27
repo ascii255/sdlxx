@@ -195,7 +195,7 @@ constexpr void invoke_impl_pointer_success_does_not_call_handler() {
   bool failed = false;
   const auto on_fail = [&] { failed = true; };
   auto* result =
-      detail::invoke_impl([&] { return &value; }, "invoke_impl_pointer_success_does_not_call_handler", on_fail);
+    detail::invoke_impl([&] { return &value; }, "invoke_impl_pointer_success_does_not_call_handler", on_fail);
   expect(result == &value);
   expect(!failed);
   on_fail();
@@ -206,7 +206,7 @@ constexpr void invoke_impl_bool_success_does_not_call_handler() {
   bool failed = false;
   const auto on_fail = [&] { failed = true; };
   const bool result =
-      detail::invoke_impl([] { return true; }, "invoke_impl_bool_success_does_not_call_handler", on_fail);
+    detail::invoke_impl([] { return true; }, "invoke_impl_bool_success_does_not_call_handler", on_fail);
   expect(result);
   expect(!failed);
   on_fail();
@@ -217,7 +217,7 @@ constexpr void invoke_impl_integer_success_does_not_call_handler() {
   bool failed = false;
   const auto on_fail = [&] { failed = true; };
   const int result =
-      detail::invoke_impl([] { return 1; }, "invoke_impl_integer_success_does_not_call_handler", on_fail);
+    detail::invoke_impl([] { return 1; }, "invoke_impl_integer_success_does_not_call_handler", on_fail);
   expect(result == 1);
   expect(!failed);
   on_fail();
@@ -276,7 +276,7 @@ inline void invoke_impl_pointer_failure_calls_handler() {
 inline void invoke_impl_bool_failure_calls_handler() {
   bool failed = false;
   const bool result =
-      detail::invoke_impl([] { return false; }, "invoke_impl_bool_failure_calls_handler", [&] { failed = true; });
+    detail::invoke_impl([] { return false; }, "invoke_impl_bool_failure_calls_handler", [&] { failed = true; });
   expect(!result);
   expect(failed);
 }
@@ -284,14 +284,14 @@ inline void invoke_impl_bool_failure_calls_handler() {
 inline void invoke_impl_integer_failure_calls_handler() {
   bool failed = false;
   const int result =
-      detail::invoke_impl([] { return -1; }, "invoke_impl_integer_failure_calls_handler", [&] { failed = true; });
+    detail::invoke_impl([] { return -1; }, "invoke_impl_integer_failure_calls_handler", [&] { failed = true; });
   expect(result == -1);
   expect(failed);
 }
 
 inline void invoke_impl_overload_failure_without_on_fail() {
   auto* result =
-      detail::invoke_impl([] { return static_cast<int*>(nullptr); }, "invoke_impl_overload_failure_without_on_fail");
+    detail::invoke_impl([] { return static_cast<int*>(nullptr); }, "invoke_impl_overload_failure_without_on_fail");
   expect(result == nullptr);
 }
 

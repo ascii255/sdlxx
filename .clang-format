@@ -6,3 +6,5 @@ PointerAlignment: Left
 AllowShortIfStatementsOnASingleLine: WithoutElse
 SpaceBeforeCpp11BracedList: true
 Cpp11BracedListStyle: false
+ConstructorInitializerIndentWidth: 2
+ContinuationIndentWidth: 2
