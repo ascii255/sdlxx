@@ -13,6 +13,7 @@ target_sources(sdlxx INTERFACE
   FILE_SET HEADERS
   BASE_DIRS include
   FILES
+    include/sdlxx/audio.hpp
     include/sdlxx/init.hpp
     include/sdlxx/utility.hpp
 )
@@ -32,6 +33,7 @@ if(PROJECT_IS_TOP_LEVEL)
   )
   set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
   include(CTest)
+  add_test(NAME audio COMMAND $<TARGET_FILE:sdlxx_testing> audio)
   add_test(NAME init COMMAND $<TARGET_FILE:sdlxx_testing> init)
   add_test(NAME utility COMMAND $<TARGET_FILE:sdlxx_testing> utility)
   include(Coverage)

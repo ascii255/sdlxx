@@ -4,11 +4,13 @@
 
 #include <expect/expect.hpp>
 
+#include <sdlxx/audio.hpp>
 #include <sdlxx/init.hpp>
 #include <sdlxx/utility.hpp>
 
 int main(int argc, char** argv) {
   const auto run_all = [] {
+    sdlxx::testing::run_audio_tests();
     sdlxx::testing::run_init_tests();
     sdlxx::testing::run_utility_tests();
   };
@@ -27,6 +29,11 @@ int main(int argc, char** argv) {
 
   if (selector == "init") {
     sdlxx::testing::run_init_tests();
+    return EXIT_SUCCESS;
+  }
+
+  if (selector == "audio") {
+    sdlxx::testing::run_audio_tests();
     return EXIT_SUCCESS;
   }
 
