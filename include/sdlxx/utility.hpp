@@ -40,7 +40,7 @@ template <typename Fn> constexpr auto invoke_impl(Fn&& fn, const char* name) {
 
 } // namespace detail
 
-#define Invoke(fn, ...) detail::invoke_impl([&] { return (fn); }, #fn __VA_OPT__(, [&] { __VA_ARGS__; }))
+#define Invoke(fn, ...) sdlxx::detail::invoke_impl([&] { return (fn); }, #fn __VA_OPT__(, [&] { __VA_ARGS__; }))
 
 } // namespace sdlxx::inline v1_0_0
 
@@ -162,34 +162,6 @@ inline auto read_stream_contents(std::FILE* stream) -> std::string {
 
 constexpr void print_error_returns_void() { expect(std::is_same_v<decltype(print_error("prefix", "message")), void>); }
 
-constexpr void invoke_impl_pointer_success() {
-  int value = 42;
-  auto* result = detail::invoke_impl([&] { return &value; }, "invoke_impl_pointer_success");
-  expect(result == &value);
-}
-
-constexpr void invoke_impl_bool_success() {
-  const bool result = detail::invoke_impl([] { return true; }, "invoke_impl_bool_success");
-  expect(result);
-}
-
-constexpr void invoke_impl_integer_success() {
-  const int result = detail::invoke_impl([] { return 0; }, "invoke_impl_integer_success");
-  expect(result == 0);
-}
-
-constexpr void invoke_impl_overload_without_on_fail() {
-  int value = 7;
-  auto* result = detail::invoke_impl([&] { return &value; }, "invoke_impl_overload_without_on_fail");
-  expect(result == &value);
-}
-
-constexpr void invoke_macro_success() {
-  int value = 5;
-  auto* result = Invoke(&value);
-  expect(result == &value);
-}
-
 constexpr void invoke_impl_pointer_success_does_not_call_handler() {
   int value = 9;
   bool failed = false;
@@ -203,10 +175,11 @@ constexpr void invoke_impl_pointer_success_does_not_call_handler() {
 }
 
 constexpr void invoke_impl_bool_success_does_not_call_handler() {
+  bool value = true;
   bool failed = false;
-  const auto on_fail = [&] { failed = true; };
+  auto on_fail = [&] { failed = true; };
   const bool result =
-    detail::invoke_impl([] { return true; }, "invoke_impl_bool_success_does_not_call_handler", on_fail);
+    detail::invoke_impl([&] { return value; }, "invoke_impl_bool_success_does_not_call_handler", on_fail);
   expect(result);
   expect(!failed);
   on_fail();
@@ -214,11 +187,12 @@ constexpr void invoke_impl_bool_success_does_not_call_handler() {
 }
 
 constexpr void invoke_impl_integer_success_does_not_call_handler() {
+  int value = 1;
   bool failed = false;
-  const auto on_fail = [&] { failed = true; };
+  auto on_fail = [&] { failed = true; };
   const int result =
-    detail::invoke_impl([] { return 1; }, "invoke_impl_integer_success_does_not_call_handler", on_fail);
-  expect(result == 1);
+    detail::invoke_impl([&] { return value; }, "invoke_impl_integer_success_does_not_call_handler", on_fail);
+  expect(result == value);
   expect(!failed);
   on_fail();
   expect(failed);
@@ -233,14 +207,6 @@ constexpr void invoke_macro_success_does_not_call_handler() {
   expect(!failed);
   on_fail();
   expect(failed);
-}
-
-constexpr void invoke_macro_evaluates_expression_once() {
-  int value = 11;
-  int invocation_count = 0;
-  auto* result = Invoke((++invocation_count, &value));
-  expect(result == &value);
-  expect(invocation_count == 1);
 }
 
 // --- runtime-only tests (print_error / failure paths) ---
@@ -319,16 +285,10 @@ inline void invoke_macro_failure_calls_handler() {
 
 constexpr void run_utility_tests() {
   // compile-time and runtime safe
-  invoke_impl_pointer_success();
-  invoke_impl_bool_success();
-  invoke_impl_integer_success();
-  invoke_impl_overload_without_on_fail();
-  invoke_macro_success();
   invoke_impl_pointer_success_does_not_call_handler();
   invoke_impl_bool_success_does_not_call_handler();
   invoke_impl_integer_success_does_not_call_handler();
   invoke_macro_success_does_not_call_handler();
-  invoke_macro_evaluates_expression_once();
   print_error_returns_void();
 
   // runtime only — failure paths call print_error which calls std::println

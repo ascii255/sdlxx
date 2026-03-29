@@ -4,6 +4,7 @@ static_assert(__cplusplus >= 202302L, "sdlxx requires C++23");
 
 #include <SDL3/SDL_init.h>
 
+#include <capi/flag.hpp>
 #include <capi/unique_flgd.hpp>
 #include <capi/unique_sys.hpp>
 
@@ -13,9 +14,21 @@ namespace sdlxx::inline v1_0_0 {
 
 using System = capi::unique_sys<[] { return Invoke(SDL_Init(0)); }, SDL_Quit>;
 
+enum struct InitFlag : SDL_InitFlags {
+  Audio = SDL_INIT_AUDIO,
+  Video = SDL_INIT_VIDEO,
+  Joystick = SDL_INIT_JOYSTICK,
+  Haptic = SDL_INIT_HAPTIC,
+  Gamepad = SDL_INIT_GAMEPAD,
+  Events = SDL_INIT_EVENTS,
+  Sensor = SDL_INIT_SENSOR,
+  Camera = SDL_INIT_CAMERA,
+};
+ENABLE_FLAG_ENUM(InitFlag);
+
 inline bool InitSubSystem(SDL_InitFlags flags) noexcept { return Invoke(SDL_InitSubSystem(flags)); }
 
-using AudioSubSystem = capi::unique_flgd<SDL_INIT_AUDIO, InitSubSystem, SDL_QuitSubSystem, SDL_WasInit>;
+template <InitFlag Flag> using SubSystem = capi::unique_flgd<Flag, InitSubSystem, SDL_QuitSubSystem, SDL_WasInit>;
 
 } // namespace sdlxx::inline v1_0_0
 
@@ -31,6 +44,10 @@ using AudioSubSystem = capi::unique_flgd<SDL_INIT_AUDIO, InitSubSystem, SDL_Quit
 #include <expect/expect.hpp>
 
 namespace sdlxx::testing {
+
+constexpr auto audio_sub_system_flag = InitFlag::Audio;
+using AudioSubSystem = SubSystem<audio_sub_system_flag>;
+constexpr auto audio_flag_mask = std::to_underlying(audio_sub_system_flag);
 
 constexpr void system_is_non_copyable_and_non_movable() {
   expect(!std::is_copy_constructible_v<System>);
@@ -51,8 +68,20 @@ constexpr void audio_sub_system_is_move_only() {
 }
 
 constexpr void audio_sub_system_has_explicit_conversions() {
+  using init_flag_value_t = std::remove_cv_t<decltype(audio_flag_mask)>;
   expect(std::is_same_v<decltype(static_cast<bool>(std::declval<const AudioSubSystem&>())), bool>);
-  expect(std::is_same_v<decltype(static_cast<SDL_InitFlags>(std::declval<const AudioSubSystem&>())), SDL_InitFlags>);
+  expect(
+    std::is_same_v<decltype(static_cast<init_flag_value_t>(std::declval<const AudioSubSystem&>())), init_flag_value_t>);
+}
+
+constexpr void init_flag_audio_matches_sdl_audio_mask() { expect(audio_flag_mask == SDL_INIT_AUDIO); }
+
+constexpr void init_flag_operator_or_combines_flags() {
+  using capi::operator|;
+  const InitFlag combined = InitFlag::Audio | InitFlag::Events;
+  const auto combined_mask = std::to_underlying(combined);
+  expect((combined_mask & SDL_INIT_AUDIO) != 0U);
+  expect((combined_mask & SDL_INIT_EVENTS) != 0U);
 }
 
 inline void system_default_construction_initializes_sdl() {
@@ -61,33 +90,33 @@ inline void system_default_construction_initializes_sdl() {
 }
 
 inline void init_sub_system_audio_sets_query_flag_when_successful() {
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
-  const bool initialized = InitSubSystem(SDL_INIT_AUDIO);
-  const SDL_InitFlags active_flags = SDL_WasInit(SDL_INIT_AUDIO);
+  SDL_QuitSubSystem(audio_flag_mask);
+  const bool initialized = InitSubSystem(audio_flag_mask);
+  const auto active_flags = SDL_WasInit(audio_flag_mask);
 
-  expect(((active_flags & SDL_INIT_AUDIO) != 0U) == initialized);
+  expect(((active_flags & audio_flag_mask) != 0U) == initialized);
 
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  SDL_QuitSubSystem(audio_flag_mask);
 }
 
 inline void audio_sub_system_lifecycle_restores_clean_state() {
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
-  const SDL_InitFlags before_flags = SDL_WasInit(SDL_INIT_AUDIO);
-  expect((before_flags & SDL_INIT_AUDIO) == 0U);
+  SDL_QuitSubSystem(audio_flag_mask);
+  const auto before_flags = SDL_WasInit(audio_flag_mask);
+  expect((before_flags & audio_flag_mask) == 0U);
 
   {
     AudioSubSystem audio {};
     const bool audio_initialized = static_cast<bool>(audio);
-    expect((static_cast<SDL_InitFlags>(audio) == SDL_INIT_AUDIO) == audio_initialized);
-    expect(((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0U) == audio_initialized);
+    expect((static_cast<decltype(audio_flag_mask)>(audio) == audio_flag_mask) == audio_initialized);
+    expect(((SDL_WasInit(audio_flag_mask) & audio_flag_mask) != 0U) == audio_initialized);
   }
 
-  const SDL_InitFlags after_flags = SDL_WasInit(SDL_INIT_AUDIO);
-  expect((after_flags & SDL_INIT_AUDIO) == 0U);
+  const auto after_flags = SDL_WasInit(audio_flag_mask);
+  expect((after_flags & audio_flag_mask) == 0U);
 }
 
 inline void audio_sub_system_move_constructor_transfers_ownership() {
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  SDL_QuitSubSystem(audio_flag_mask);
 
   {
     AudioSubSystem source {};
@@ -96,16 +125,16 @@ inline void audio_sub_system_move_constructor_transfers_ownership() {
     AudioSubSystem target { std::move(source) };
     expect(!static_cast<bool>(source));
     expect(static_cast<bool>(target) == source_initialized);
-    expect(static_cast<SDL_InitFlags>(source) == 0U);
-    expect((static_cast<SDL_InitFlags>(target) == SDL_INIT_AUDIO) == source_initialized);
-    expect(((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0U) == source_initialized);
+    expect(static_cast<decltype(audio_flag_mask)>(source) == 0U);
+    expect((static_cast<decltype(audio_flag_mask)>(target) == audio_flag_mask) == source_initialized);
+    expect(((SDL_WasInit(audio_flag_mask) & audio_flag_mask) != 0U) == source_initialized);
   }
 
-  expect((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0U);
+  expect((SDL_WasInit(audio_flag_mask) & audio_flag_mask) == 0U);
 }
 
 inline void audio_sub_system_move_assignment_transfers_ownership() {
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  SDL_QuitSubSystem(audio_flag_mask);
 
   {
     AudioSubSystem source {};
@@ -119,16 +148,16 @@ inline void audio_sub_system_move_assignment_transfers_ownership() {
 
     expect(static_cast<bool>(source) == target_initialized);
     expect(static_cast<bool>(target) == source_initialized);
-    expect((static_cast<SDL_InitFlags>(source) == SDL_INIT_AUDIO) == target_initialized);
-    expect((static_cast<SDL_InitFlags>(target) == SDL_INIT_AUDIO) == source_initialized);
-    expect(((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0U) == (source_initialized || target_initialized));
+    expect((static_cast<decltype(audio_flag_mask)>(source) == audio_flag_mask) == target_initialized);
+    expect((static_cast<decltype(audio_flag_mask)>(target) == audio_flag_mask) == source_initialized);
+    expect(((SDL_WasInit(audio_flag_mask) & audio_flag_mask) != 0U) == (source_initialized || target_initialized));
   }
 
-  expect((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0U);
+  expect((SDL_WasInit(audio_flag_mask) & audio_flag_mask) == 0U);
 }
 
 inline void audio_sub_system_self_move_assignment_preserves_state() {
-  SDL_QuitSubSystem(SDL_INIT_AUDIO);
+  SDL_QuitSubSystem(audio_flag_mask);
 
   {
     AudioSubSystem audio {};
@@ -138,11 +167,11 @@ inline void audio_sub_system_self_move_assignment_preserves_state() {
     audio = std::move(same);
 
     expect(static_cast<bool>(audio) == initialized);
-    expect((static_cast<SDL_InitFlags>(audio) == SDL_INIT_AUDIO) == initialized);
-    expect(((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) != 0U) == initialized);
+    expect((static_cast<decltype(audio_flag_mask)>(audio) == audio_flag_mask) == initialized);
+    expect(((SDL_WasInit(audio_flag_mask) & audio_flag_mask) != 0U) == initialized);
   }
 
-  expect((SDL_WasInit(SDL_INIT_AUDIO) & SDL_INIT_AUDIO) == 0U);
+  expect((SDL_WasInit(audio_flag_mask) & audio_flag_mask) == 0U);
 }
 
 constexpr void run_init_tests() {
@@ -150,6 +179,8 @@ constexpr void run_init_tests() {
   system_has_bool_conversion();
   audio_sub_system_is_move_only();
   audio_sub_system_has_explicit_conversions();
+  init_flag_audio_matches_sdl_audio_mask();
+  init_flag_operator_or_combines_flags();
 
   if !consteval {
     system_default_construction_initializes_sdl();
