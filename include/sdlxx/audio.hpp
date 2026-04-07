@@ -15,22 +15,53 @@ static_assert(__cplusplus >= 202302L, "sdlxx requires C++23");
 
 namespace sdlxx::inline v1_0_0 {
 
+enum struct AudioFormat : Uint16 {
+  Unknown = SDL_AUDIO_UNKNOWN,
+  U8 = SDL_AUDIO_U8,
+  S8 = SDL_AUDIO_S8,
+  S16 = SDL_AUDIO_S16,
+  S32 = SDL_AUDIO_S32,
+  F32 = SDL_AUDIO_F32
+};
+
+struct AudioSpec {
+  AudioFormat format;
+  size_t channels;
+  size_t freq;
+
+  constexpr AudioSpec() noexcept = default;
+  constexpr AudioSpec(const SDL_AudioSpec& sdl) noexcept
+    : format { static_cast<AudioFormat>(sdl.format) }, channels { static_cast<size_t>(sdl.channels) },
+      freq { static_cast<size_t>(sdl.freq) } {}
+
+  constexpr operator SDL_AudioSpec() const noexcept {
+    return { .format = static_cast<SDL_AudioFormat>(format),
+             .channels = static_cast<int>(channels),
+             .freq = static_cast<int>(freq) };
+  }
+};
+
 inline SDL_AudioDeviceID OpenAudioDevice(SDL_AudioDeviceID type, const SDL_AudioSpec* spec) noexcept {
   return Invoke(SDL_OpenAudioDevice(type, spec));
 }
 
 struct AudioDevice : capi::unique_id<SDL_AudioDeviceID, OpenAudioDevice, SDL_CloseAudioDevice> {
+  enum Default : SDL_AudioDeviceID {
+    Playback = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,
+    Recording = SDL_AUDIO_DEVICE_DEFAULT_RECORDING,
+  };
+
   explicit AudioDevice(SDL_AudioDeviceID type, const SDL_AudioSpec* spec = nullptr) noexcept : unique_id(type, spec) {}
   explicit AudioDevice(SDL_AudioDeviceID type, const SDL_AudioSpec& spec) noexcept : AudioDevice(type, &spec) {}
 
-  [[nodiscard]] SDL_AudioSpec get_format() const noexcept {
+  [[nodiscard]] AudioSpec get_spec() const noexcept {
     SDL_AudioSpec spec;
     if (!Invoke(SDL_GetAudioDeviceFormat(raw(), &spec, nullptr))) return {};
-    return spec;
+    return AudioSpec(spec);
   }
 
+  [[nodiscard]] AudioFormat get_format() const noexcept { return get_spec().format; }
   [[nodiscard]] bool is_paused() const noexcept { return SDL_AudioDevicePaused(raw()); }
-
   bool pause() const noexcept { return Invoke(SDL_PauseAudioDevice(raw())); }
   bool resume() const noexcept { return Invoke(SDL_ResumeAudioDevice(raw())); }
 
@@ -38,12 +69,13 @@ private:
   SDL_AudioDeviceID raw() const noexcept { return static_cast<SDL_AudioDeviceID>(*this); }
 };
 
-inline SDL_AudioStream* CreateAudioStream(const SDL_AudioSpec& src_spec, const AudioDevice& device) noexcept {
+inline SDL_AudioStream* CreateAudioStream(const AudioSpec& src_spec, const AudioDevice& device) noexcept {
   if (!device) {
     print_error("AudioDevice", "invalid");
     return nullptr;
   }
-  SDL_AudioStream* stream { Invoke(SDL_CreateAudioStream(&src_spec, nullptr)) };
+  const auto sdl_src_spec { static_cast<SDL_AudioSpec>(src_spec) };
+  SDL_AudioStream* stream { Invoke(SDL_CreateAudioStream(&sdl_src_spec, nullptr)) };
   if (!stream) return nullptr;
   if (!Invoke(SDL_BindAudioStream(static_cast<SDL_AudioDeviceID>(device), stream))) {
     SDL_DestroyAudioStream(stream);
@@ -53,10 +85,9 @@ inline SDL_AudioStream* CreateAudioStream(const SDL_AudioSpec& src_spec, const A
 }
 
 struct AudioStream : capi::unique_res<SDL_AudioStream, CreateAudioStream, SDL_DestroyAudioStream> {
-  explicit AudioStream(const SDL_AudioSpec& src_spec, const AudioDevice& device) noexcept
-    : unique_res(src_spec, device) {}
+  explicit AudioStream(const AudioSpec& src_spec, const AudioDevice& device) noexcept : unique_res(src_spec, device) {}
   // device must outlive the stream — deleted constructor enforces this at compile time
-  explicit AudioStream(const SDL_AudioSpec& src_spec, AudioDevice&& device) = delete;
+  explicit AudioStream(const AudioSpec& src_spec, AudioDevice&& device) = delete;
 
   bool put(std::span<const std::byte> bytes) const noexcept {
     if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
@@ -145,10 +176,8 @@ inline void audio_device_invalid_id_exercises_failure_paths() {
   expect(!static_cast<bool>(invalid));
   expect(static_cast<SDL_AudioDeviceID>(invalid) == 0U);
 
-  const SDL_AudioSpec format = invalid.get_format();
-  expect(format.freq == 0);
-  expect(format.channels == 0);
-  expect(format.format == SDL_AUDIO_UNKNOWN);
+  const AudioFormat format = invalid.get_format();
+  expect(format == AudioFormat::Unknown);
 
   expect(!invalid.pause());
   expect(!invalid.resume());
@@ -162,10 +191,8 @@ inline void audio_device_default_open_has_consistent_state() {
   const SDL_AudioDeviceID id = static_cast<SDL_AudioDeviceID>(device);
 
   expect((id != 0U) == opened);
-  const SDL_AudioSpec format = device.get_format();
-  expect(!opened || format.freq > 0);
-  expect(!opened || format.channels > 0);
-  expect(!opened || format.format != SDL_AUDIO_UNKNOWN);
+  const AudioFormat format = device.get_format();
+  expect(!opened || format != AudioFormat::Unknown);
 
   const bool pause_result = device.pause();
   expect(!opened || pause_result);
@@ -297,6 +324,7 @@ constexpr void run_audio_tests() {
   audio_stream_has_expected_constructors_and_conversions();
 
   if !consteval {
+    AudioDevice playback_device { AudioDevice::Playback };
     audio_device_invalid_id_exercises_failure_paths();
     audio_device_default_open_has_consistent_state();
     audio_device_constructor_with_spec_matches_open_state();
