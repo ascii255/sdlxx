@@ -6,6 +6,7 @@ static_assert(__cplusplus >= 202302L, "sdlxx requires C++23");
 #include <cstddef>
 #include <limits>
 #include <span>
+#include <utility>
 
 #include <SDL3/SDL_audio.h>
 
@@ -40,6 +41,17 @@ struct AudioSpec {
              .channels = static_cast<int>(channels),
              .freq = static_cast<int>(freq) };
   }
+
+  constexpr size_t get_bit_depth() const noexcept { return SDL_AUDIO_BITSIZE(std::to_underlying(format)); }
+  constexpr size_t get_bytes_per_sample() const noexcept { return SDL_AUDIO_BYTESIZE(std::to_underlying(format)); }
+  constexpr size_t get_bytes_per_frame() const noexcept { return get_bytes_per_sample() * channels; }
+  constexpr size_t get_bytes_per_second() const noexcept { return get_bytes_per_frame() * freq; }
+  constexpr bool is_float() const noexcept { return SDL_AUDIO_ISFLOAT(std::to_underlying(format)); }
+  constexpr bool is_int() const noexcept { return SDL_AUDIO_ISINT(std::to_underlying(format)); }
+  constexpr bool is_big_endian() const noexcept { return SDL_AUDIO_ISBIGENDIAN(std::to_underlying(format)); }
+  constexpr bool is_little_endian() const noexcept { return SDL_AUDIO_ISLITTLEENDIAN(std::to_underlying(format)); }
+  constexpr bool is_signed() const noexcept { return SDL_AUDIO_ISSIGNED(std::to_underlying(format)); }
+  constexpr bool is_unsigned() const noexcept { return SDL_AUDIO_ISUNSIGNED(std::to_underlying(format)); }
 };
 
 inline SDL_AudioDeviceID OpenAudioDevice(SDL_AudioDeviceID type, const SDL_AudioSpec* spec) noexcept {
@@ -244,6 +256,189 @@ constexpr void load_wav_returns_audio_buffer() {
   expect(std::is_same_v<decltype(LoadWAV(std::declval<const std::string>())), AudioBuffer>);
 }
 
+constexpr void audio_spec_default_construction_has_unknown_format() {
+  const AudioSpec spec {};
+  expect(spec.format == AudioFormat::Unknown);
+  expect(spec.channels == 0U);
+  expect(spec.freq == 0U);
+}
+
+constexpr void audio_spec_u8_format_has_8_bits_and_1_byte_per_sample() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::U8;
+    s.channels = 1U;
+    s.freq = 44100U;
+    return s;
+  }();
+  expect(spec.get_bit_depth() == 8U);
+  expect(spec.get_bytes_per_sample() == 1U);
+  expect(spec.get_bytes_per_frame() == 1U);
+  expect(spec.get_bytes_per_second() == 44100U);
+  expect(spec.is_int());
+  expect(!spec.is_float());
+}
+
+constexpr void audio_spec_s16_format_has_16_bits_and_2_bytes_per_sample() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    s.channels = 2U;
+    s.freq = 44100U;
+    return s;
+  }();
+  expect(spec.get_bit_depth() == 16U);
+  expect(spec.get_bytes_per_sample() == 2U);
+  expect(spec.get_bytes_per_frame() == 4U);
+  expect(spec.get_bytes_per_second() == 176400U);
+  expect(spec.is_int());
+  expect(!spec.is_float());
+}
+
+constexpr void audio_spec_s32_format_has_32_bits_and_4_bytes_per_sample() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S32;
+    s.channels = 1U;
+    s.freq = 48000U;
+    return s;
+  }();
+  expect(spec.get_bit_depth() == 32U);
+  expect(spec.get_bytes_per_sample() == 4U);
+  expect(spec.get_bytes_per_frame() == 4U);
+  expect(spec.get_bytes_per_second() == 192000U);
+  expect(spec.is_int());
+  expect(!spec.is_float());
+}
+
+constexpr void audio_spec_f32_format_has_32_bits_and_4_bytes_per_sample() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::F32;
+    s.channels = 2U;
+    s.freq = 48000U;
+    return s;
+  }();
+  expect(spec.get_bit_depth() == 32U);
+  expect(spec.get_bytes_per_sample() == 4U);
+  expect(spec.get_bytes_per_frame() == 8U);
+  expect(spec.get_bytes_per_second() == 384000U);
+  expect(!spec.is_int());
+  expect(spec.is_float());
+}
+
+constexpr void audio_spec_s8_format_has_8_bits_and_1_byte_per_sample() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S8;
+    s.channels = 1U;
+    s.freq = 22050U;
+    return s;
+  }();
+  expect(spec.get_bit_depth() == 8U);
+  expect(spec.get_bytes_per_sample() == 1U);
+  expect(spec.get_bytes_per_frame() == 1U);
+  expect(spec.get_bytes_per_second() == 22050U);
+  expect(spec.is_int());
+  expect(!spec.is_float());
+}
+
+constexpr void audio_spec_multichannel_calculates_bytes_per_frame_correctly() {
+  constexpr auto stereo_s16 = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    s.channels = 2U;
+    s.freq = 44100U;
+    return s;
+  }();
+  constexpr auto quad_s32 = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S32;
+    s.channels = 4U;
+    s.freq = 48000U;
+    return s;
+  }();
+  constexpr auto mono_f32 = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::F32;
+    s.channels = 1U;
+    s.freq = 44100U;
+    return s;
+  }();
+
+  expect(stereo_s16.get_bytes_per_frame() == 4U);
+  expect(quad_s32.get_bytes_per_frame() == 16U);
+  expect(mono_f32.get_bytes_per_frame() == 4U);
+}
+
+constexpr void audio_spec_sdl_conversion_preserves_format_and_channels() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    s.channels = 2U;
+    s.freq = 44100U;
+    return s;
+  }();
+  constexpr SDL_AudioSpec sdl = static_cast<SDL_AudioSpec>(spec);
+  expect(sdl.format == SDL_AUDIO_S16);
+  expect(sdl.channels == 2);
+  expect(sdl.freq == 44100);
+
+  constexpr AudioSpec reconstructed { sdl };
+  expect(reconstructed.format == AudioFormat::S16);
+  expect(reconstructed.channels == 2U);
+  expect(reconstructed.freq == 44100U);
+}
+
+constexpr void audio_spec_endianness_properties() {
+  constexpr auto u8_format = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::U8;
+    return s;
+  }();
+
+  constexpr bool is_big = u8_format.is_big_endian();
+  constexpr bool is_little = u8_format.is_little_endian();
+  expect(is_big || is_little);
+}
+
+constexpr void audio_spec_is_big_endian() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    return s;
+  }();
+  expect(std::is_same_v<decltype(spec.is_big_endian()), bool>);
+}
+
+constexpr void audio_spec_is_little_endian() {
+  constexpr auto spec = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    return s;
+  }();
+  expect(std::is_same_v<decltype(spec.is_little_endian()), bool>);
+}
+
+constexpr void audio_spec_signedness_properties() {
+  constexpr auto s16_format = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::S16;
+    return s;
+  }();
+  constexpr auto u8_format = []() constexpr {
+    AudioSpec s {};
+    s.format = AudioFormat::U8;
+    return s;
+  }();
+
+  expect(s16_format.is_signed());
+  expect(!s16_format.is_unsigned());
+
+  expect(!u8_format.is_signed());
+  expect(u8_format.is_unsigned());
+}
+
 inline auto make_temp_wav_path() -> std::filesystem::path {
   const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
   return std::filesystem::temp_directory_path() / ("sdlxx_test_" + std::to_string(now) + ".wav");
@@ -435,6 +630,28 @@ inline void audio_device_invalid_id_exercises_failure_paths() {
   expect(!invalid.is_paused());
 }
 
+inline void audio_spec_all_endianness_and_signedness_methods() {
+  const AudioSpec s16_spec = make_audio_spec(AudioFormat::S16, 2U, 44100U);
+  const AudioSpec u8_spec = make_audio_spec(AudioFormat::U8, 1U, 22050U);
+
+  const bool s16_big = s16_spec.is_big_endian();
+  const bool s16_little = s16_spec.is_little_endian();
+  const bool s16_signed = s16_spec.is_signed();
+  const bool s16_unsigned = s16_spec.is_unsigned();
+
+  const bool u8_big = u8_spec.is_big_endian();
+  const bool u8_little = u8_spec.is_little_endian();
+  const bool u8_signed = u8_spec.is_signed();
+  const bool u8_unsigned = u8_spec.is_unsigned();
+
+  expect((s16_big || s16_little));
+  expect((u8_big || u8_little));
+  expect(s16_signed);
+  expect(!s16_unsigned);
+  expect(!u8_signed);
+  expect(u8_unsigned);
+}
+
 inline void audio_device_default_open_has_consistent_state() {
   AudioSubSystem audio_sub_system {};
   AudioDevice device { SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK };
@@ -575,10 +792,23 @@ constexpr void run_audio_tests() {
   audio_stream_has_expected_constructors_and_conversions();
   audio_buffer_is_move_only();
   load_wav_returns_audio_buffer();
+  audio_spec_default_construction_has_unknown_format();
+  audio_spec_u8_format_has_8_bits_and_1_byte_per_sample();
+  audio_spec_s16_format_has_16_bits_and_2_bytes_per_sample();
+  audio_spec_s32_format_has_32_bits_and_4_bytes_per_sample();
+  audio_spec_f32_format_has_32_bits_and_4_bytes_per_sample();
+  audio_spec_s8_format_has_8_bits_and_1_byte_per_sample();
+  audio_spec_multichannel_calculates_bytes_per_frame_correctly();
+  audio_spec_sdl_conversion_preserves_format_and_channels();
+  audio_spec_endianness_properties();
+  audio_spec_is_big_endian();
+  audio_spec_is_little_endian();
+  audio_spec_signedness_properties();
 
   if !consteval {
     AudioDevice playback_device { AudioDevice::Playback };
     audio_device_invalid_id_exercises_failure_paths();
+    audio_spec_all_endianness_and_signedness_methods();
     audio_device_default_open_has_consistent_state();
     audio_device_constructor_with_spec_matches_open_state();
     create_audio_stream_rejects_invalid_device();
