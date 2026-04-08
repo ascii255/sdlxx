@@ -2,6 +2,7 @@
 
 static_assert(__cplusplus >= 202302L, "sdlxx requires C++23");
 
+#include <cassert>
 #include <cstddef>
 #include <limits>
 #include <span>
@@ -113,6 +114,63 @@ private:
   SDL_AudioStream* raw() const noexcept { return static_cast<SDL_AudioStream*>(*this); }
 };
 
+struct AudioBuffer : private std::span<std::byte> {
+  AudioBuffer() noexcept = default;
+  // Takes ownership of an SDL_malloc-allocated buffer.
+  explicit AudioBuffer(std::span<std::byte> data, AudioSpec spec) noexcept : std::span<std::byte>(data), spec(spec) {}
+  explicit AudioBuffer(std::size_t size, AudioSpec spec = {}) noexcept
+    : std::span<std::byte>(size ? static_cast<std::byte*>(SDL_malloc(size)) : nullptr, size), spec(spec) {
+    assert(!size || data() != nullptr);
+  }
+  ~AudioBuffer() noexcept { SDL_free(data()); }
+  AudioBuffer(const AudioBuffer&) = delete;
+  AudioBuffer& operator=(const AudioBuffer&) = delete;
+  AudioBuffer(AudioBuffer&& other) noexcept
+    : std::span<std::byte>(std::exchange(static_cast<std::span<std::byte>&>(other), {})),
+      spec(std::exchange(other.spec, {})) {}
+  AudioBuffer& operator=(AudioBuffer&& other) noexcept {
+    if (this != &other) {
+      SDL_free(data());
+      static_cast<std::span<std::byte>&>(*this) = std::exchange(static_cast<std::span<std::byte>&>(other), {});
+      spec = std::exchange(other.spec, {});
+    }
+    return *this;
+  }
+
+  [[nodiscard]] bool empty() const noexcept { return std::span<std::byte>::empty(); }
+  [[nodiscard]] std::size_t size() const noexcept { return std::span<std::byte>::size(); }
+  [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return std::as_bytes(*this); }
+
+  // Releases the audio buffer. `spec` is preserved.
+  void reset() noexcept {
+    SDL_free(data());
+    static_cast<std::span<std::byte>&>(*this) = {};
+  }
+
+  void write_at(std::size_t offset, std::span<const std::byte> src) noexcept {
+    assert(!src.empty());
+    assert(offset <= size());
+    assert(src.size() <= std::numeric_limits<std::size_t>::max() - offset);
+    const std::size_t new_size = offset + src.size();
+    if (new_size > size()) {
+      auto* new_ptr { static_cast<std::byte*>(SDL_realloc(data(), new_size)) };
+      assert(new_ptr);
+      static_cast<std::span<std::byte>&>(*this) = { new_ptr, new_size };
+    }
+    SDL_memcpy(data() + offset, src.data(), src.size());
+  }
+
+  AudioSpec spec;
+};
+
+[[nodiscard]] inline AudioBuffer LoadWAV(const std::string filename) noexcept {
+  SDL_AudioSpec spec;
+  Uint8* buffer;
+  Uint32 length;
+  if (!Invoke(SDL_LoadWAV(filename.c_str(), &spec, &buffer, &length))) return {};
+  return AudioBuffer { std::as_writable_bytes(std::span(buffer, static_cast<std::size_t>(length))), spec };
+}
+
 } // namespace sdlxx::inline v1_0_0
 
 //
@@ -122,8 +180,15 @@ private:
 #ifdef SDLXX_TESTING
 
 #include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <expect/expect.hpp>
 
@@ -166,6 +231,192 @@ constexpr void audio_stream_has_expected_constructors_and_conversions() {
   expect(!std::is_constructible_v<AudioStream, const SDL_AudioSpec&, AudioDevice&&>);
   expect(std::is_same_v<decltype(static_cast<bool>(std::declval<const AudioStream&>())), bool>);
   expect(std::is_same_v<decltype(static_cast<SDL_AudioStream*>(std::declval<const AudioStream&>())), SDL_AudioStream*>);
+}
+
+constexpr void audio_buffer_is_move_only() {
+  expect(std::is_move_constructible_v<AudioBuffer>);
+  expect(std::is_move_assignable_v<AudioBuffer>);
+  expect(!std::is_copy_constructible_v<AudioBuffer>);
+  expect(!std::is_copy_assignable_v<AudioBuffer>);
+}
+
+constexpr void load_wav_returns_audio_buffer() {
+  expect(std::is_same_v<decltype(LoadWAV(std::declval<const std::string>())), AudioBuffer>);
+}
+
+inline auto make_temp_wav_path() -> std::filesystem::path {
+  const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+  return std::filesystem::temp_directory_path() / ("sdlxx_test_" + std::to_string(now) + ".wav");
+}
+
+inline void append_le16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
+  bytes.push_back(static_cast<std::uint8_t>(value & 0x00FFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 8U) & 0x00FFU));
+}
+
+inline void append_le32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+  bytes.push_back(static_cast<std::uint8_t>(value & 0x000000FFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 8U) & 0x000000FFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 16U) & 0x000000FFU));
+  bytes.push_back(static_cast<std::uint8_t>((value >> 24U) & 0x000000FFU));
+}
+
+inline auto write_test_wav_file(const std::filesystem::path& path) -> bool {
+  constexpr std::uint16_t channels = 1U;
+  constexpr std::uint32_t sample_rate = 44100U;
+  constexpr std::uint16_t bits_per_sample = 16U;
+  constexpr std::uint16_t block_align = static_cast<std::uint16_t>(channels * (bits_per_sample / 8U));
+  constexpr std::uint32_t byte_rate = sample_rate * block_align;
+  constexpr std::array<std::uint8_t, 4> pcm_data { 0x00U, 0x00U, 0xFFU, 0x7FU };
+  constexpr std::uint32_t data_size = static_cast<std::uint32_t>(pcm_data.size());
+  constexpr std::uint32_t riff_chunk_size = 36U + data_size;
+
+  std::vector<std::uint8_t> bytes {};
+  bytes.reserve(44U + pcm_data.size());
+
+  bytes.insert(bytes.end(), { 'R', 'I', 'F', 'F' });
+  append_le32(bytes, riff_chunk_size);
+  bytes.insert(bytes.end(), { 'W', 'A', 'V', 'E' });
+  bytes.insert(bytes.end(), { 'f', 'm', 't', ' ' });
+  append_le32(bytes, 16U);
+  append_le16(bytes, 1U);
+  append_le16(bytes, channels);
+  append_le32(bytes, sample_rate);
+  append_le32(bytes, byte_rate);
+  append_le16(bytes, block_align);
+  append_le16(bytes, bits_per_sample);
+  bytes.insert(bytes.end(), { 'd', 'a', 't', 'a' });
+  append_le32(bytes, data_size);
+  bytes.insert(bytes.end(), pcm_data.begin(), pcm_data.end());
+
+  std::ofstream file { path, std::ios::binary | std::ios::trunc };
+  if (!file) {
+    return false;
+  }
+  file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  return file.good();
+}
+
+inline auto make_audio_spec(AudioFormat format, std::size_t channels, std::size_t freq) -> AudioSpec {
+  AudioSpec spec {};
+  spec.format = format;
+  spec.channels = channels;
+  spec.freq = freq;
+  return spec;
+}
+
+inline void audio_buffer_default_constructs_empty() {
+  AudioBuffer buffer {};
+  expect(buffer.empty());
+  expect(buffer.size() == 0U);
+  expect(buffer.bytes().empty());
+  expect(buffer.spec.format == AudioFormat::Unknown);
+  expect(buffer.spec.channels == 0U);
+  expect(buffer.spec.freq == 0U);
+}
+
+inline void audio_buffer_reset_clears_owned_bytes_and_preserves_spec() {
+  AudioBuffer buffer { 8U, make_audio_spec(AudioFormat::S16, 2U, 44100U) };
+  expect(!buffer.empty());
+
+  buffer.reset();
+
+  expect(buffer.empty());
+  expect(buffer.size() == 0U);
+  expect(buffer.spec.format == AudioFormat::S16);
+  expect(buffer.spec.channels == 2U);
+  expect(buffer.spec.freq == 44100U);
+}
+
+inline void audio_buffer_write_at_grows_and_writes_bytes() {
+  AudioBuffer buffer { 2U, make_audio_spec(AudioFormat::S16, 1U, 22050U) };
+
+  const std::array<std::byte, 3> source { std::byte { 0x11 }, std::byte { 0x22 }, std::byte { 0x33 } };
+  buffer.write_at(1U, source);
+
+  expect(buffer.size() == 4U);
+  const auto bytes = buffer.bytes();
+  expect(bytes.size() == 4U);
+  expect(std::to_integer<std::uint8_t>(bytes[1]) == 0x11U);
+  expect(std::to_integer<std::uint8_t>(bytes[2]) == 0x22U);
+  expect(std::to_integer<std::uint8_t>(bytes[3]) == 0x33U);
+}
+
+inline void audio_buffer_move_constructor_transfers_data_and_spec() {
+  AudioBuffer source { 4U, make_audio_spec(AudioFormat::S16, 2U, 48000U) };
+  expect(source.size() == 4U);
+
+  AudioBuffer moved { std::move(source) };
+
+  expect(source.empty());
+  expect(source.spec.format == AudioFormat::Unknown);
+  expect(source.spec.channels == 0U);
+  expect(source.spec.freq == 0U);
+  expect(moved.size() == 4U);
+  expect(moved.spec.format == AudioFormat::S16);
+  expect(moved.spec.channels == 2U);
+  expect(moved.spec.freq == 48000U);
+}
+
+inline void audio_buffer_move_assignment_transfers_data_and_spec() {
+  AudioBuffer source { 6U, make_audio_spec(AudioFormat::S8, 1U, 16000U) };
+  AudioBuffer target { 2U, make_audio_spec(AudioFormat::F32, 2U, 96000U) };
+
+  target = std::move(source);
+
+  expect(source.empty());
+  expect(source.spec.format == AudioFormat::Unknown);
+  expect(source.spec.channels == 0U);
+  expect(source.spec.freq == 0U);
+  expect(target.size() == 6U);
+  expect(target.spec.format == AudioFormat::S8);
+  expect(target.spec.channels == 1U);
+  expect(target.spec.freq == 16000U);
+}
+
+inline void load_wav_missing_path_returns_empty_buffer() {
+  scoped_quiet_error_output quiet_error_output;
+  expect(quiet_error_output.stream() != nullptr);
+
+  const auto missing_path = make_temp_wav_path();
+  std::error_code remove_error {};
+  (void)std::filesystem::remove(missing_path, remove_error);
+
+  AudioBuffer buffer = LoadWAV(missing_path.string());
+  expect(buffer.empty());
+  expect(buffer.size() == 0U);
+}
+
+inline void write_test_wav_file_returns_false_for_missing_parent_directory() {
+  const auto missing_parent = make_temp_wav_path();
+  const auto path = missing_parent / "nested" / "fixture.wav";
+  std::error_code remove_error {};
+  (void)std::filesystem::remove_all(missing_parent, remove_error);
+
+  expect(!write_test_wav_file(path));
+}
+
+inline void load_wav_valid_file_returns_audio_data_and_spec() {
+  const auto wav_path = make_temp_wav_path();
+  expect(write_test_wav_file(wav_path));
+
+  AudioBuffer buffer = LoadWAV(wav_path.string());
+
+  std::error_code remove_error {};
+  (void)std::filesystem::remove(wav_path, remove_error);
+
+  expect(!buffer.empty());
+  expect(buffer.size() == 4U);
+  expect(buffer.spec.format == AudioFormat::S16);
+  expect(buffer.spec.channels == 1U);
+  expect(buffer.spec.freq == 44100U);
+
+  const auto bytes = buffer.bytes();
+  expect(bytes.size() == 4U);
+  expect(std::to_integer<std::uint8_t>(bytes[0]) == 0x00U);
+  expect(std::to_integer<std::uint8_t>(bytes[1]) == 0x00U);
+  expect(std::to_integer<std::uint8_t>(bytes[2]) == 0xFFU);
+  expect(std::to_integer<std::uint8_t>(bytes[3]) == 0x7FU);
 }
 
 inline void audio_device_invalid_id_exercises_failure_paths() {
@@ -322,6 +573,8 @@ constexpr void run_audio_tests() {
   create_audio_stream_returns_stream_pointer();
   audio_stream_is_move_only();
   audio_stream_has_expected_constructors_and_conversions();
+  audio_buffer_is_move_only();
+  load_wav_returns_audio_buffer();
 
   if !consteval {
     AudioDevice playback_device { AudioDevice::Playback };
@@ -333,6 +586,14 @@ constexpr void run_audio_tests() {
     create_audio_stream_with_open_device_has_consistent_state();
     create_audio_stream_cleans_up_when_bind_fails();
     audio_stream_with_open_device_exercises_operations();
+    audio_buffer_default_constructs_empty();
+    audio_buffer_reset_clears_owned_bytes_and_preserves_spec();
+    audio_buffer_write_at_grows_and_writes_bytes();
+    audio_buffer_move_constructor_transfers_data_and_spec();
+    audio_buffer_move_assignment_transfers_data_and_spec();
+    load_wav_missing_path_returns_empty_buffer();
+    write_test_wav_file_returns_false_for_missing_parent_directory();
+    load_wav_valid_file_returns_audio_data_and_spec();
   }
 }
 

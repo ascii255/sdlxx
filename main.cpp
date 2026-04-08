@@ -6,12 +6,14 @@
 
 #include <sdlxx/audio.hpp>
 #include <sdlxx/init.hpp>
+#include <sdlxx/timer.hpp>
 #include <sdlxx/utility.hpp>
 
 int main(int argc, char** argv) {
   const auto run_all = [] {
     sdlxx::testing::run_audio_tests();
     sdlxx::testing::run_init_tests();
+    sdlxx::testing::run_timer_tests();
     sdlxx::testing::run_utility_tests();
   };
 
@@ -34,6 +36,11 @@ int main(int argc, char** argv) {
 
   if (selector == "audio") {
     sdlxx::testing::run_audio_tests();
+    return EXIT_SUCCESS;
+  }
+
+  if (selector == "timer") {
+    sdlxx::testing::run_timer_tests();
     return EXIT_SUCCESS;
   }
 
